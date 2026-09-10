@@ -1,6 +1,15 @@
-MIT License
+# Third-Party Notices
 
-Copyright (c) 2026 Luigi Schirillo
+## Mermaid 11.12.1
+
+Swift Dependency Graph Explorer vendors Mermaid 11.12.1 at
+`Sources/MermaidRenderer/Resources/mermaid.min.js`.
+
+Source: https://github.com/mermaid-js/mermaid
+
+The MIT License (MIT)
+
+Copyright (c) 2014 - 2022 Knut Sveidqvist
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

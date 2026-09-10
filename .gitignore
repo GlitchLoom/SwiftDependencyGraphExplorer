@@ -60,3 +60,30 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode / SPM local state
+.swiftpm/
+
+# IDEs
+.vscode/
+.idea/
+
+# Secrets / environment
+.env
+.env.*
+*.pem
+*.p12
+*.mobileprovision
+secrets/
+
+# Logs & temp
+*.log
+.tmp/
+
+# Internal docs (not for public repo)
+docs/
