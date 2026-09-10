@@ -67,6 +67,30 @@ final class DependencyAnalyzerTests: XCTestCase {
         XCTAssertTrue(graph.edges.isEmpty)
     }
 
+    func testFiltersStandardLibraryBaseProtocolsWhenSystemTypesAreDisabled() {
+        let protocolNames = [
+            "Equatable", "Hashable", "Comparable", "Identifiable", "Sendable",
+            "Codable", "Decodable", "Encodable", "RawRepresentable",
+            "CustomStringConvertible", "CaseIterable", "Sequence", "Collection",
+            "ExpressibleByStringLiteral", "ObservableObject", "AdditiveArithmetic"
+        ]
+        let root = SwiftType(
+            name: "Root",
+            kind: .class,
+            filePath: "Root.swift",
+            conformances: protocolNames
+        )
+
+        var options = AnalysisOptions.defaults
+        options.includeSystemTypes = false
+        options.includeThirdPartyTypes = true
+
+        let graph = DependencyAnalyzer().analyze(rootTypeName: "Root", types: [root], options: options)
+
+        XCTAssertEqual(Set(graph.nodes.map(\.name)), ["Root"])
+        XCTAssertTrue(graph.edges.isEmpty)
+    }
+
     func testThirdPartyToggleControlsExternalMethodParameterDependencies() {
         let root = SwiftType(
             name: "Root",

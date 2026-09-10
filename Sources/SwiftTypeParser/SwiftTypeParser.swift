@@ -1,5 +1,7 @@
 import Foundation
 import SDGECore
+import SwiftParser
+import SwiftSyntax
 
 public protocol SwiftTypeParsing {
     func parse(file: SwiftSourceFile, includeBodyReferences: Bool) throws -> [SwiftType]
@@ -20,62 +22,28 @@ public extension SwiftTypeParsing {
     }
 }
 
-public struct HeuristicSwiftTypeParser: SwiftTypeParsing {
+/// Parses Swift source with SwiftSyntax (the same parser the Swift compiler itself uses) rather
+/// than regular expressions. This makes declaration/scope/member boundaries exact -- comments,
+/// string literals, multi-line signatures, and nested braces no longer need special-case
+/// handling -- while type-name extraction from a given type annotation still reuses the same
+/// lightweight, already-proven text scan, since flattening generics/tuples/optionals/etc. to
+/// their referenced names was never the fragile part.
+public struct SwiftSyntaxTypeParser: SwiftTypeParsing {
     public init() {}
 
     public func parse(file: SwiftSourceFile, includeBodyReferences: Bool) throws -> [SwiftType] {
-        let source = Self.maskingCommentsAndStringContents(from: file.contents)
-        let characters = Array(source.utf16)
-        let sourceString = source as NSString
-        let fullRange = NSRange(location: 0, length: sourceString.length)
+        let collector = Self.collect(from: file.contents, filePath: file.path, includeBodyReferences: includeBodyReferences)
 
-        var types: [SwiftType] = []
+        var types = collector.types
         var indicesByName: [String: Int] = [:]
-
-        for match in Self.declarationExpression.matches(in: source, range: fullRange) {
-            guard
-                let kind = SwiftTypeKind(rawValue: sourceString.substring(with: match.range(at: 1))),
-                let bodyRange = Self.bodyRange(afterOpeningDelimiterAt: NSMaxRange(match.range) - 1, in: characters)
-            else {
-                continue
-            }
-
-            let name = sourceString.substring(with: match.range(at: 2))
-            let header = sourceString.substring(with: match.range(at: 3))
-            let relationships = Self.relationships(in: header, kind: kind)
-            let body = sourceString.substring(with: bodyRange)
-            let members = Self.members(in: body, includeBodyReferences: includeBodyReferences)
-
-            let type = SwiftType(
-                name: name,
-                kind: kind,
-                filePath: file.path,
-                inheritedTypes: relationships.inherited,
-                conformances: relationships.conformances,
-                members: members
-            )
-
-            indicesByName[name] = types.count
-            types.append(type)
+        for (index, type) in types.enumerated() {
+            indicesByName[type.name] = index
         }
 
-        for match in Self.extensionExpression.matches(in: source, range: fullRange) {
-            guard
-                let index = indicesByName[sourceString.substring(with: match.range(at: 1))],
-                let bodyRange = Self.bodyRange(afterOpeningDelimiterAt: NSMaxRange(match.range) - 1, in: characters)
-            else {
-                continue
-            }
-
-            let header = sourceString.substring(with: match.range(at: 2))
-            let body = sourceString.substring(with: bodyRange)
-            let relationships = Self.relationships(in: header, kind: nil)
-
-            Self.appendUnique(relationships.conformances, to: &types[index].conformances)
-            Self.appendUnique(
-                Self.members(in: body, includeBodyReferences: includeBodyReferences),
-                to: &types[index].members
-            )
+        for contribution in collector.extensionContributions {
+            guard let index = indicesByName[contribution.typeName] else { continue }
+            Self.appendUnique(contribution.conformances, to: &types[index].conformances)
+            Self.appendUnique(contribution.members, to: &types[index].members)
         }
 
         return types
@@ -90,11 +58,9 @@ public struct HeuristicSwiftTypeParser: SwiftTypeParsing {
         let indicesByName = Dictionary(grouping: reconciledTypes.indices) { reconciledTypes[$0].name }
 
         for file in files {
-            let source = Self.maskingCommentsAndStringContents(from: file.contents)
-            for contribution in Self.extensionContributions(
-                in: source,
-                includeBodyReferences: includeBodyReferences
-            ) {
+            let collector = Self.collect(from: file.contents, filePath: file.path, includeBodyReferences: includeBodyReferences)
+
+            for contribution in collector.extensionContributions {
                 guard let candidates = indicesByName[contribution.typeName] else { continue }
                 let sameFileIndex = candidates.first { reconciledTypes[$0].filePath == file.path }
                 guard let index = sameFileIndex ?? (candidates.count == 1 ? candidates[0] : nil) else {
@@ -110,213 +76,213 @@ public struct HeuristicSwiftTypeParser: SwiftTypeParsing {
     }
 }
 
-private extension HeuristicSwiftTypeParser {
+private extension SwiftSyntaxTypeParser {
     struct ExtensionContribution {
         let typeName: String
         let conformances: [String]
         let members: [SwiftMember]
     }
 
-    static let declarationExpression = try! NSRegularExpression(
-        pattern: #"\b(class|struct|enum|protocol|actor)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^{}>]*>)?\s*([^{}]*)\{"#
-    )
+    struct CollectorResult {
+        let types: [SwiftType]
+        let extensionContributions: [ExtensionContribution]
+    }
 
-    static let extensionExpression = try! NSRegularExpression(
-        pattern: #"\bextension\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^{}>]*>)?\s*([^{}]*)\{"#
-    )
+    static func collect(from source: String, filePath: String, includeBodyReferences: Bool) -> CollectorResult {
+        let tree = Parser.parse(source: source)
+        let visitor = TypeCollectingVisitor(filePath: filePath, includeBodyReferences: includeBodyReferences)
+        visitor.walk(tree)
+        return CollectorResult(types: visitor.types, extensionContributions: visitor.extensionContributions)
+    }
 
-    static let propertyExpression = try! NSRegularExpression(
-        pattern: #"\b(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=\{\n]+)"#
-    )
+    final class TypeCollectingVisitor: SyntaxVisitor {
+        private(set) var types: [SwiftType] = []
+        private(set) var extensionContributions: [ExtensionContribution] = []
 
-    static let initializerExpression = try! NSRegularExpression(
-        pattern: #"\binit\s*(?:[?!])?\s*\("#
-    )
+        private let filePath: String
+        private let includeBodyReferences: Bool
 
-    static let functionExpression = try! NSRegularExpression(
-        pattern: #"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^{}()]*>)?\s*\("#
-    )
+        init(filePath: String, includeBodyReferences: Bool) {
+            self.filePath = filePath
+            self.includeBodyReferences = includeBodyReferences
+            super.init(viewMode: .sourceAccurate)
+        }
 
-    static let bodyReferenceExpression = try! NSRegularExpression(
-        pattern: #"\b([A-Z][A-Za-z0-9_]*)\s*(?:<[^{}()]*>)?\s*\("#
-    )
+        override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+            collectType(name: node.name.text, kind: .class, inheritanceClause: node.inheritanceClause, memberBlock: node.memberBlock)
+            return .visitChildren
+        }
 
-    static let identifierExpression = try! NSRegularExpression(
-        pattern: #"[A-Za-z_][A-Za-z0-9_]*"#
-    )
+        override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
+            collectType(name: node.name.text, kind: .struct, inheritanceClause: node.inheritanceClause, memberBlock: node.memberBlock)
+            return .visitChildren
+        }
 
-    static func extensionContributions(
-        in source: String,
-        includeBodyReferences: Bool
-    ) -> [ExtensionContribution] {
-        let characters = Array(source.utf16)
-        let sourceString = source as NSString
-        let fullRange = NSRange(location: 0, length: sourceString.length)
+        override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+            collectType(name: node.name.text, kind: .enum, inheritanceClause: node.inheritanceClause, memberBlock: node.memberBlock)
+            return .visitChildren
+        }
 
-        return extensionExpression.matches(in: source, range: fullRange).compactMap { match in
-            guard let bodyRange = bodyRange(
-                afterOpeningDelimiterAt: NSMaxRange(match.range) - 1,
-                in: characters
-            ) else {
-                return nil
-            }
+        override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind {
+            collectType(name: node.name.text, kind: .protocol, inheritanceClause: node.inheritanceClause, memberBlock: node.memberBlock)
+            return .visitChildren
+        }
 
-            let typeName = sourceString.substring(with: match.range(at: 1))
-            let header = sourceString.substring(with: match.range(at: 2))
-            let body = sourceString.substring(with: bodyRange)
-            return ExtensionContribution(
+        override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
+            collectType(name: node.name.text, kind: .actor, inheritanceClause: node.inheritanceClause, memberBlock: node.memberBlock)
+            return .visitChildren
+        }
+
+        override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
+            guard let typeName = simpleName(of: node.extendedType) else { return .visitChildren }
+
+            let relationships = SwiftSyntaxTypeParser.relationships(in: node.inheritanceClause, kind: nil)
+            let members = SwiftSyntaxTypeParser.members(in: node.memberBlock, includeBodyReferences: includeBodyReferences)
+            extensionContributions.append(ExtensionContribution(
                 typeName: typeName,
-                conformances: relationships(in: header, kind: nil).conformances,
-                members: members(in: body, includeBodyReferences: includeBodyReferences)
-            )
-        }
-    }
-
-    static func maskingCommentsAndStringContents(from source: String) -> String {
-        enum LexicalContext {
-            case code
-            case string(isMultiline: Bool)
-            case interpolation(depth: Int)
+                conformances: relationships.conformances,
+                members: members
+            ))
+            return .visitChildren
         }
 
-        var characters = Array(source)
-        var index = 0
-        var blockDepth = 0
-        var contexts: [LexicalContext] = [.code]
+        private func collectType(
+            name: String,
+            kind: SwiftTypeKind,
+            inheritanceClause: InheritanceClauseSyntax?,
+            memberBlock: MemberBlockSyntax
+        ) {
+            let relationships = SwiftSyntaxTypeParser.relationships(in: inheritanceClause, kind: kind)
+            let members = SwiftSyntaxTypeParser.members(in: memberBlock, includeBodyReferences: includeBodyReferences)
+            types.append(SwiftType(
+                name: name,
+                kind: kind,
+                filePath: filePath,
+                inheritedTypes: relationships.inherited,
+                conformances: relationships.conformances,
+                members: members
+            ))
+        }
 
-        while index < characters.count {
-            if blockDepth > 0 {
-                if hasPrefix("/*", in: characters, at: index) {
-                    characters[index] = " "
-                    characters[index + 1] = " "
-                    blockDepth += 1
-                    index += 2
-                } else if hasPrefix("*/", in: characters, at: index) {
-                    characters[index] = " "
-                    characters[index + 1] = " "
-                    blockDepth -= 1
-                    index += 2
-                } else {
-                    if characters[index] != "\n" {
-                        characters[index] = " "
-                    }
-                    index += 1
-                }
-                continue
+        /// The simple name an `extension` targets: the base type name for a plain or generic
+        /// type, or the last component for a dotted type (matching how `typeNames` elsewhere
+        /// only keeps the final component of a qualified name).
+        private func simpleName(of type: TypeSyntax) -> String? {
+            if let identifier = type.as(IdentifierTypeSyntax.self) {
+                return identifier.name.text
             }
-
-            switch contexts.last ?? .code {
-            case .string(let isMultiline):
-                if characters[index] == "\\" {
-                    characters[index] = " "
-                    if index + 1 < characters.count, characters[index + 1] == "(" {
-                        contexts.append(.interpolation(depth: 1))
-                        index += 2
-                    } else {
-                        if index + 1 < characters.count, characters[index + 1] != "\n" {
-                            characters[index + 1] = " "
-                        }
-                        index += 2
-                    }
-                } else if isMultiline, hasPrefix("\"\"\"", in: characters, at: index) {
-                    characters[index] = " "
-                    characters[index + 1] = " "
-                    characters[index + 2] = " "
-                    contexts.removeLast()
-                    index += 3
-                } else if !isMultiline, characters[index] == "\"" {
-                    characters[index] = " "
-                    contexts.removeLast()
-                    index += 1
-                } else {
-                    if characters[index] != "\n" {
-                        characters[index] = " "
-                    }
-                    index += 1
-                }
-                continue
-
-            case .code, .interpolation:
-                break
+            if let member = type.as(MemberTypeSyntax.self) {
+                return member.name.text
             }
-
-            if hasPrefix("//", in: characters, at: index) {
-                while index < characters.count, characters[index] != "\n" {
-                    characters[index] = " "
-                    index += 1
-                }
-            } else if hasPrefix("/*", in: characters, at: index) {
-                characters[index] = " "
-                characters[index + 1] = " "
-                blockDepth = 1
-                index += 2
-            } else if hasPrefix("\"\"\"", in: characters, at: index) {
-                characters[index] = " "
-                characters[index + 1] = " "
-                characters[index + 2] = " "
-                contexts.append(.string(isMultiline: true))
-                index += 3
-            } else if characters[index] == "\"" {
-                characters[index] = " "
-                contexts.append(.string(isMultiline: false))
-                index += 1
-            } else if case .interpolation(let depth) = contexts.last, characters[index] == "(" {
-                contexts[contexts.count - 1] = .interpolation(depth: depth + 1)
-                index += 1
-            } else if case .interpolation(let depth) = contexts.last, characters[index] == ")" {
-                if depth == 1 {
-                    contexts.removeLast()
-                } else {
-                    contexts[contexts.count - 1] = .interpolation(depth: depth - 1)
-                }
-                index += 1
-            } else {
-                index += 1
-            }
-        }
-
-        return String(characters)
-    }
-
-    static func hasPrefix(_ prefix: String, in characters: [Character], at index: Int) -> Bool {
-        let prefixCharacters = Array(prefix)
-        guard index + prefixCharacters.count <= characters.count else {
-            return false
-        }
-
-        return characters[index..<(index + prefixCharacters.count)].elementsEqual(prefixCharacters)
-    }
-
-    static func bodyRange(afterOpeningDelimiterAt openingIndex: Int, in characters: [UInt16]) -> NSRange? {
-        guard openingIndex >= 0, openingIndex < characters.count, characters[openingIndex] == 123 else {
             return nil
         }
-
-        var depth = 1
-        var index = openingIndex + 1
-
-        while index < characters.count {
-            if characters[index] == 123 {
-                depth += 1
-            } else if characters[index] == 125 {
-                depth -= 1
-                if depth == 0 {
-                    return NSRange(location: openingIndex + 1, length: index - openingIndex - 1)
-                }
-            }
-            index += 1
-        }
-
-        return nil
     }
 
-    static func relationships(in header: String, kind: SwiftTypeKind?) -> (inherited: [String], conformances: [String]) {
-        guard let colonIndex = header.firstIndex(of: ":") else {
-            return ([], [])
+    // MARK: - Member extraction
+
+    static func members(in memberBlock: MemberBlockSyntax, includeBodyReferences: Bool) -> [SwiftMember] {
+        var members: [SwiftMember] = []
+
+        for item in memberBlock.members {
+            switch item.decl.kind {
+            case .variableDecl:
+                appendUnique(
+                    propertyMembers(in: item.decl.cast(VariableDeclSyntax.self), includeBodyReferences: includeBodyReferences),
+                    to: &members
+                )
+            case .initializerDecl:
+                let node = item.decl.cast(InitializerDeclSyntax.self)
+                appendUnique(parameterMembers(in: node.signature, kind: .initializerParameter), to: &members)
+            case .functionDecl:
+                let node = item.decl.cast(FunctionDeclSyntax.self)
+                appendUnique(parameterMembers(in: node.signature, kind: .methodParameter), to: &members)
+                appendUnique(returnMembers(of: node), to: &members)
+                if includeBodyReferences, let body = node.body {
+                    appendUnique(bodyReferences(in: body), to: &members)
+                }
+            default:
+                break
+            }
         }
 
-        let candidateGroups = splitTopLevel(String(header[header.index(after: colonIndex)...]), on: ",")
-            .map(typeNames)
+        return members
+    }
+
+    static func propertyMembers(in node: VariableDeclSyntax, includeBodyReferences: Bool) -> [SwiftMember] {
+        node.bindings.flatMap { binding -> [SwiftMember] in
+            var members: [SwiftMember] = []
+
+            if let name = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text,
+               let type = binding.typeAnnotation?.type {
+                members += typeNames(from: type).map { SwiftMember(name: name, typeName: $0, kind: .property) }
+            }
+
+            // A property/static-let initializer (e.g. `static let live = AppServices(analyze: {
+            // DependencyAnalyzer() }, ...)`) is itself an expression, not a `func` body, so it
+            // needs its own scan for the same capitalized-call-expression references -- this is
+            // how factory/DI-style closures assigned to a property get picked up.
+            if includeBodyReferences, let initializerValue = binding.initializer?.value {
+                members += bodyReferences(in: initializerValue)
+            }
+
+            return members
+        }
+    }
+
+    static func parameterMembers(in signature: FunctionSignatureSyntax, kind: SwiftMemberKind) -> [SwiftMember] {
+        signature.parameterClause.parameters.flatMap { parameter -> [SwiftMember] in
+            let name = (parameter.secondName ?? parameter.firstName).text
+            guard name != "_" else { return [] }
+            return typeNames(from: parameter.type).map { SwiftMember(name: name, typeName: $0, kind: kind) }
+        }
+    }
+
+    static func returnMembers(of node: FunctionDeclSyntax) -> [SwiftMember] {
+        guard let returnType = node.signature.returnClause?.type else { return [] }
+        let name = node.name.text
+        return typeNames(from: returnType).map { SwiftMember(name: name, typeName: $0, kind: .methodReturn) }
+    }
+
+    static func bodyReferences(in node: some SyntaxProtocol) -> [SwiftMember] {
+        let collector = BodyReferenceCollector()
+        collector.walk(node)
+        return collector.members
+    }
+
+    final class BodyReferenceCollector: SyntaxVisitor {
+        private(set) var members: [SwiftMember] = []
+
+        init() {
+            super.init(viewMode: .sourceAccurate)
+        }
+
+        override func visit(_ node: FunctionCallExprSyntax) -> SyntaxVisitorContinueKind {
+            if let name = calleeName(of: node.calledExpression), name.first?.isUppercase == true {
+                SwiftSyntaxTypeParser.appendUnique(SwiftMember(name: name, typeName: name, kind: .bodyReference), to: &members)
+            }
+            return .visitChildren
+        }
+
+        private func calleeName(of expression: ExprSyntax) -> String? {
+            if let reference = expression.as(DeclReferenceExprSyntax.self) {
+                return reference.baseName.text
+            }
+            if let memberAccess = expression.as(MemberAccessExprSyntax.self) {
+                return memberAccess.declName.baseName.text
+            }
+            return nil
+        }
+    }
+
+    // MARK: - Inheritance / conformance classification
+
+    static func relationships(
+        in inheritanceClause: InheritanceClauseSyntax?,
+        kind: SwiftTypeKind?
+    ) -> (inherited: [String], conformances: [String]) {
+        guard let inheritanceClause else { return ([], []) }
+
+        let candidateGroups = inheritanceClause.inheritedTypes.map { typeNames(from: $0.type) }
         let candidates = candidateGroups.flatMap { $0 }
 
         if kind == .class, let firstGroup = candidateGroups.first, let firstCandidate = firstGroup.first {
@@ -330,191 +296,26 @@ private extension HeuristicSwiftTypeParser {
         return ([], candidates)
     }
 
-    static func members(in body: String, includeBodyReferences: Bool) -> [SwiftMember] {
-        let bodyString = body as NSString
-        let fullRange = NSRange(location: 0, length: bodyString.length)
-        let characters = Array(body.utf16)
-        let depths = braceDepths(in: characters)
-        var members: [SwiftMember] = []
+    // MARK: - Type-name flattening
 
-        for match in propertyExpression.matches(in: body, range: fullRange) where isTopLevel(match.range.location, depths: depths) {
-            let name = bodyString.substring(with: match.range(at: 1))
-            for typeName in typeNames(bodyString.substring(with: match.range(at: 2))) {
-                appendUnique(SwiftMember(name: name, typeName: typeName, kind: .property), to: &members)
-            }
+    /// Extracts every referenced type name from a type annotation, flattening generic
+    /// arguments, tuples, optionals, arrays/dictionaries, and function types down to their
+    /// component names (e.g. `Repository<User>` -> `["Repository", "User"]`), the same way a
+    /// dependency edge is derived elsewhere from a raw type string. Any top-level attribute
+    /// (`@convention(c) () -> Void`) is stripped structurally first so its payload never leaks
+    /// in as a fake identifier.
+    static func typeNames(from type: TypeSyntax) -> [String] {
+        var unwrapped = type
+        while let attributed = unwrapped.as(AttributedTypeSyntax.self) {
+            unwrapped = attributed.baseType
         }
-
-        for match in initializerExpression.matches(in: body, range: fullRange) where isTopLevel(match.range.location, depths: depths) {
-            let openingParenthesis = NSMaxRange(match.range) - 1
-            guard let closingParenthesis = matchingParenthesis(afterOpeningAt: openingParenthesis, in: characters) else {
-                continue
-            }
-
-            let parametersRange = NSRange(location: openingParenthesis + 1, length: closingParenthesis - openingParenthesis - 1)
-            appendUnique(
-                parameters(in: bodyString.substring(with: parametersRange), kind: .initializerParameter),
-                to: &members
-            )
-        }
-
-        for match in functionExpression.matches(in: body, range: fullRange) where isTopLevel(match.range.location, depths: depths) {
-            let openingParenthesis = NSMaxRange(match.range) - 1
-            guard let closingParenthesis = matchingParenthesis(afterOpeningAt: openingParenthesis, in: characters) else {
-                continue
-            }
-
-            let parametersRange = NSRange(location: openingParenthesis + 1, length: closingParenthesis - openingParenthesis - 1)
-            appendUnique(parameters(in: bodyString.substring(with: parametersRange), kind: .methodParameter), to: &members)
-
-            let callable = callableParts(after: closingParenthesis, in: characters)
-            if let returnTypeRange = callable.returnTypeRange {
-                let name = bodyString.substring(with: match.range(at: 1))
-                for typeName in typeNames(bodyString.substring(with: returnTypeRange)) {
-                    appendUnique(SwiftMember(name: name, typeName: typeName, kind: .methodReturn), to: &members)
-                }
-            }
-
-            if includeBodyReferences, let openingBrace = callable.bodyOpeningBrace {
-                if let functionBodyRange = bodyRange(afterOpeningDelimiterAt: openingBrace, in: characters) {
-                    appendUnique(bodyReferences(in: bodyString.substring(with: functionBodyRange)), to: &members)
-                }
-            }
-        }
-
-        return members
-    }
-
-    static func braceDepths(in characters: [UInt16]) -> [Int] {
-        var depths = Array(repeating: 0, count: characters.count)
-        var depth = 0
-
-        for index in characters.indices {
-            depths[index] = depth
-            if characters[index] == 123 {
-                depth += 1
-            } else if characters[index] == 125 {
-                depth = max(0, depth - 1)
-            }
-        }
-
-        return depths
-    }
-
-    static func isTopLevel(_ location: Int, depths: [Int]) -> Bool {
-        location >= 0 && location < depths.count && depths[location] == 0
-    }
-
-    static func matchingParenthesis(afterOpeningAt openingIndex: Int, in characters: [UInt16]) -> Int? {
-        guard openingIndex >= 0, openingIndex < characters.count, characters[openingIndex] == 40 else {
-            return nil
-        }
-
-        var depth = 1
-        var index = openingIndex + 1
-
-        while index < characters.count {
-            if characters[index] == 40 {
-                depth += 1
-            } else if characters[index] == 41 {
-                depth -= 1
-                if depth == 0 {
-                    return index
-                }
-            }
-            index += 1
-        }
-
-        return nil
-    }
-
-    static func parameters(in source: String, kind: SwiftMemberKind) -> [SwiftMember] {
-        splitTopLevel(source, on: ",").flatMap { parameter -> [SwiftMember] in
-            guard let colonIndex = parameter.firstIndex(of: ":") else {
-                return []
-            }
-
-            let labels = parameter[..<colonIndex]
-                .split(whereSeparator: { $0.isWhitespace })
-                .filter { $0 != "_" }
-            guard let name = labels.last.map(String.init) else {
-                return []
-            }
-
-            let typeSource = String(parameter[parameter.index(after: colonIndex)...])
-            return typeNames(prefixBeforeTopLevelEquals(in: typeSource)).map {
-                SwiftMember(name: name, typeName: $0, kind: kind)
-            }
-        }
-    }
-
-    static func callableParts(after closingParenthesis: Int, in characters: [UInt16]) -> (returnTypeRange: NSRange?, bodyOpeningBrace: Int?) {
-        let start = closingParenthesis + 1
-        var arrowIndex: Int?
-        var cursor = start
-
-        while cursor < characters.count {
-            if characters[cursor] == 45, cursor + 1 < characters.count, characters[cursor + 1] == 62 {
-                arrowIndex = cursor
-                cursor += 2
-                continue
-            }
-
-            if characters[cursor] == 123 {
-                let returnTypeRange = arrowIndex.map {
-                    NSRange(location: $0 + 2, length: cursor - $0 - 2)
-                }
-                return (returnTypeRange, cursor)
-            }
-
-            if characters[cursor] == 59 {
-                let returnTypeRange = arrowIndex.map {
-                    NSRange(location: $0 + 2, length: cursor - $0 - 2)
-                }
-                return (returnTypeRange, nil)
-            }
-
-            if characters[cursor] == 10 || characters[cursor] == 13 {
-                var nextNonWhitespace = cursor + 1
-                while nextNonWhitespace < characters.count,
-                      characters[nextNonWhitespace] == 10 || characters[nextNonWhitespace] == 13 || characters[nextNonWhitespace] == 32 || characters[nextNonWhitespace] == 9 {
-                    nextNonWhitespace += 1
-                }
-
-                if nextNonWhitespace < characters.count, characters[nextNonWhitespace] == 123 {
-                    cursor = nextNonWhitespace
-                    continue
-                }
-
-                let returnTypeRange = arrowIndex.map {
-                    NSRange(location: $0 + 2, length: cursor - $0 - 2)
-                }
-                return (returnTypeRange, nil)
-            }
-
-            cursor += 1
-        }
-
-        let returnTypeRange = arrowIndex.map {
-            NSRange(location: $0 + 2, length: characters.count - $0 - 2)
-        }
-        return (returnTypeRange, nil)
-    }
-
-    static func bodyReferences(in source: String) -> [SwiftMember] {
-        let sourceString = source as NSString
-        let fullRange = NSRange(location: 0, length: sourceString.length)
-
-        return bodyReferenceExpression.matches(in: source, range: fullRange).map { match in
-            let typeName = sourceString.substring(with: match.range(at: 1))
-            return SwiftMember(name: typeName, typeName: typeName, kind: .bodyReference)
-        }
+        return typeNames(unwrapped.trimmedDescription)
     }
 
     static func typeNames(_ source: String) -> [String] {
-        let attributeStrippedSource = removingTypeAttributes(from: source)
-        let sourceString = attributeStrippedSource as NSString
+        let sourceString = source as NSString
         let matches = identifierExpression.matches(
-            in: attributeStrippedSource,
+            in: source,
             range: NSRange(location: 0, length: sourceString.length)
         )
 
@@ -541,6 +342,10 @@ private extension HeuristicSwiftTypeParser {
         return names
     }
 
+    static let identifierExpression = try! NSRegularExpression(
+        pattern: #"[A-Za-z_][A-Za-z0-9_]*"#
+    )
+
     static func isKnownProtocolConformance(_ name: String) -> Bool {
         let knownProtocolNames: Set<String> = ["Codable", "Decodable", "Encodable", "Identifiable", "ObservableObject"]
 
@@ -559,73 +364,6 @@ private extension HeuristicSwiftTypeParser {
             name.hasSuffix("Controller") ||
             name.hasSuffix("Object") ||
             name.hasSuffix("Operation")
-    }
-
-    static func removingTypeAttributes(from source: String) -> String {
-        var characters = Array(source)
-        var index = 0
-
-        while index < characters.count {
-            guard characters[index] == "@" else {
-                index += 1
-                continue
-            }
-
-            characters[index] = " "
-            index += 1
-
-            while index < characters.count,
-                  characters[index].isLetter || characters[index].isNumber || characters[index] == "_" || characters[index] == "." {
-                characters[index] = " "
-                index += 1
-            }
-
-            var payloadStart = index
-            while payloadStart < characters.count, characters[payloadStart].isWhitespace {
-                payloadStart += 1
-            }
-
-            guard payloadStart < characters.count, characters[payloadStart] == "(" else {
-                continue
-            }
-
-            var depth = 0
-            index = payloadStart
-            while index < characters.count {
-                if characters[index] == "(" {
-                    depth += 1
-                } else if characters[index] == ")" {
-                    depth -= 1
-                }
-                characters[index] = " "
-                index += 1
-
-                if depth == 0 {
-                    break
-                }
-            }
-        }
-
-        return String(characters)
-    }
-
-    static func prefixBeforeTopLevelEquals(in source: String) -> String {
-        var depth = 0
-
-        for (index, character) in source.enumerated() {
-            switch character {
-            case "(", "[", "<":
-                depth += 1
-            case ")", "]", ">":
-                depth = max(0, depth - 1)
-            case "=" where depth == 0:
-                return String(source.prefix(index))
-            default:
-                break
-            }
-        }
-
-        return source
     }
 
     static func previousNonWhitespaceCharacter(before index: Int, in source: NSString) -> Character? {
@@ -650,31 +388,6 @@ private extension HeuristicSwiftTypeParser {
             cursor += 1
         }
         return nil
-    }
-
-    static func splitTopLevel(_ source: String, on separator: Character) -> [String] {
-        var parts: [String] = []
-        var current = ""
-        var depth = 0
-
-        for character in source {
-            switch character {
-            case "(", "[", "<":
-                depth += 1
-            case ")", "]", ">":
-                depth = max(0, depth - 1)
-            case let value where value == separator && depth == 0:
-                parts.append(current)
-                current = ""
-                continue
-            default:
-                break
-            }
-            current.append(character)
-        }
-
-        parts.append(current)
-        return parts
     }
 
     static func appendUnique<T: Equatable>(_ values: [T], to destination: inout [T]) {

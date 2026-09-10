@@ -29,7 +29,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let types = try HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false)
+        let types = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false)
         let viewModel = try XCTUnwrap(types.first { $0.name == "ViewModel" })
 
         XCTAssertEqual(types.map(\.kind).sorted { $0.rawValue < $1.rawValue }, [.actor, .class, .enum, .protocol, .struct])
@@ -50,11 +50,34 @@ final class SwiftTypeParserTests: XCTestCase {
             contents: "struct A { func make() { Helper().run() } }"
         )
 
-        let disabled = try HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false)
-        let enabled = try HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: true)
+        let disabled = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false)
+        let enabled = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true)
 
         XCTAssertFalse(disabled[0].members.contains { $0.kind == .bodyReference && $0.typeName == "Helper" })
         XCTAssertTrue(enabled[0].members.contains { $0.kind == .bodyReference && $0.typeName == "Helper" })
+    }
+
+    func testBodyReferencesInsidePropertyInitializerClosuresAreOnlyParsedWhenEnabled() throws {
+        let file = SwiftSourceFile(
+            url: URL(fileURLWithPath: "/tmp/Services.swift"),
+            path: "Services.swift",
+            contents: """
+            struct Services {
+                static let live: Services = Services(
+                    analyze: {
+                        DependencyAnalyzer().run()
+                    }
+                )
+                let analyze: () -> Void
+            }
+            """
+        )
+
+        let disabled = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false)
+        let enabled = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true)
+
+        XCTAssertFalse(disabled[0].members.contains { $0.kind == .bodyReference })
+        XCTAssertTrue(enabled[0].members.contains(SwiftMember(name: "DependencyAnalyzer", typeName: "DependencyAnalyzer", kind: .bodyReference)))
     }
 
     func testIgnoresDeclarationsInsideComments() throws {
@@ -70,7 +93,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let types = try HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false)
+        let types = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false)
 
         XCTAssertEqual(types.map(\.name), ["Visible"])
     }
@@ -88,7 +111,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let types = try HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: true)
+        let types = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true)
         let container = try XCTUnwrap(types.first { $0.name == "Container" })
 
         XCTAssertEqual(types.map(\.name), ["Container", "Following"])
@@ -108,7 +131,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let child = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let child = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertEqual(child.inheritedTypes, ["Base", "Model"])
         XCTAssertEqual(child.conformances, ["ChildProtocol"])
@@ -129,7 +152,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let viewModel = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let viewModel = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertEqual(viewModel.inheritedTypes, [])
         XCTAssertEqual(viewModel.conformances, ["ObservableObject", "ViewModelDelegate"])
@@ -147,7 +170,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let configurator = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let configurator = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertTrue(configurator.members.contains(SwiftMember(name: "service", typeName: "Service", kind: .initializerParameter)))
         XCTAssertTrue(configurator.members.contains(SwiftMember(name: "service", typeName: "Service", kind: .methodParameter)))
@@ -168,7 +191,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let builder = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: true).first)
+        let builder = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true).first)
 
         XCTAssertTrue(builder.members.contains(SwiftMember(name: "Factory", typeName: "Factory", kind: .bodyReference)))
     }
@@ -185,7 +208,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let worker = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let worker = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertFalse(worker.members.contains(SwiftMember(name: "prepare", typeName: "Payload", kind: .methodReturn)))
         XCTAssertTrue(worker.members.contains(SwiftMember(name: "load", typeName: "Payload", kind: .methodReturn)))
@@ -198,7 +221,7 @@ final class SwiftTypeParserTests: XCTestCase {
             contents: "protocol InlineWorker { func prepare(); func load() -> Payload }"
         )
 
-        let worker = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let worker = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertFalse(worker.members.contains(SwiftMember(name: "prepare", typeName: "Payload", kind: .methodReturn)))
         XCTAssertTrue(worker.members.contains(SwiftMember(name: "load", typeName: "Payload", kind: .methodReturn)))
@@ -211,7 +234,7 @@ final class SwiftTypeParserTests: XCTestCase {
             contents: "struct CallbackHolder { let callback: @convention(c) () -> Void }"
         )
 
-        let holder = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let holder = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertTrue(holder.members.contains(SwiftMember(name: "callback", typeName: "Void", kind: .property)))
         XCTAssertFalse(holder.members.contains { $0.typeName == "c" || $0.typeName == "convention" })
@@ -225,7 +248,7 @@ final class SwiftTypeParserTests: XCTestCase {
             contents: "final class Navigator: Routable {}"
         )
 
-        let navigator = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let navigator = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertEqual(navigator.inheritedTypes, [])
         XCTAssertEqual(navigator.conformances, ["Routable"])
@@ -238,7 +261,7 @@ final class SwiftTypeParserTests: XCTestCase {
             contents: "struct Printer { func render(message: String = \"()\") -> Output { Factory() } }"
         )
 
-        let printer = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: true).first)
+        let printer = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true).first)
 
         XCTAssertTrue(printer.members.contains(SwiftMember(name: "message", typeName: "String", kind: .methodParameter)))
         XCTAssertTrue(printer.members.contains(SwiftMember(name: "render", typeName: "Output", kind: .methodReturn)))
@@ -252,7 +275,7 @@ final class SwiftTypeParserTests: XCTestCase {
             contents: "struct Renderer { func render() { let message = \"\\(Factory())\" } }"
         )
 
-        let renderer = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: true).first)
+        let renderer = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true).first)
 
         XCTAssertTrue(renderer.members.contains(SwiftMember(name: "Factory", typeName: "Factory", kind: .bodyReference)))
     }
@@ -271,7 +294,7 @@ final class SwiftTypeParserTests: XCTestCase {
             """
         )
 
-        let types = try HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: true)
+        let types = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true)
         let renderer = try XCTUnwrap(types.first { $0.name == "Renderer" })
 
         XCTAssertEqual(types.map(\.name), ["Renderer", "Following"])
@@ -285,7 +308,7 @@ final class SwiftTypeParserTests: XCTestCase {
             contents: "struct Renderer { func render() { let message = \"\"\"\n\\(Factory())\n\"\"\" } }"
         )
 
-        let renderer = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: true).first)
+        let renderer = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: true).first)
 
         XCTAssertTrue(renderer.members.contains(SwiftMember(name: "Factory", typeName: "Factory", kind: .bodyReference)))
     }
@@ -298,7 +321,7 @@ final class SwiftTypeParserTests: XCTestCase {
         let contents = try String(contentsOf: fixtureURL, encoding: .utf8)
         let file = SwiftSourceFile(url: fixtureURL, path: "Tests/Fixtures/ParserFixture.swift", contents: contents)
 
-        let fixture = try XCTUnwrap(HeuristicSwiftTypeParser().parse(file: file, includeBodyReferences: false).first)
+        let fixture = try XCTUnwrap(SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false).first)
 
         XCTAssertEqual(fixture.name, "ParserFixture")
         XCTAssertEqual(fixture.inheritedTypes, ["NSObject"])

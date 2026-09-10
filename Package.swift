@@ -13,10 +13,20 @@ let package = Package(
         .library(name: "GraphBuilder", targets: ["GraphBuilder"]),
         .library(name: "MermaidRenderer", targets: ["MermaidRenderer"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "509.0.0")
+    ],
     targets: [
         .target(name: "SDGECore"),
         .target(name: "ProjectScanner", dependencies: ["SDGECore"]),
-        .target(name: "SwiftTypeParser", dependencies: ["SDGECore"]),
+        .target(
+            name: "SwiftTypeParser",
+            dependencies: [
+                "SDGECore",
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax")
+            ]
+        ),
         .target(name: "DependencyAnalyzer", dependencies: ["SDGECore"]),
         .target(name: "GraphBuilder", dependencies: ["SDGECore"]),
         .target(

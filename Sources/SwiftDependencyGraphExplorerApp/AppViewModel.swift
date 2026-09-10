@@ -21,7 +21,7 @@ struct AppServices {
         },
         parseFile: { file, includeBodyReferences in
             try await Task.detached {
-                try HeuristicSwiftTypeParser().parse(
+                try SwiftSyntaxTypeParser().parse(
                     file: file,
                     includeBodyReferences: includeBodyReferences
                 )
@@ -29,7 +29,7 @@ struct AppServices {
         },
         reconcileProject: { types, files, includeBodyReferences in
             try await Task.detached {
-                try HeuristicSwiftTypeParser().reconcileProject(
+                try SwiftSyntaxTypeParser().reconcileProject(
                     types: types,
                     files: files,
                     includeBodyReferences: includeBodyReferences

@@ -15,7 +15,7 @@ Requirements:
 - macOS 13 or later
 - Xcode 15 or later, including its Swift toolchain
 
-No dependency installation is needed beyond Xcode and its Swift toolchain. The Mermaid JavaScript runtime is vendored in the repository for local rendering.
+The Mermaid JavaScript runtime is vendored in the repository for local rendering. The Swift parser depends on [swift-syntax](https://github.com/swiftlang/swift-syntax), resolved automatically by Swift Package Manager — the first build needs network access to fetch it.
 
 To run the app:
 
@@ -44,7 +44,7 @@ flowchart LR
 
 ## Known Limitations
 
-- The app uses a heuristic Swift parser rather than the compiler's full syntax and semantic analysis, so complex language constructs may be missed or interpreted imperfectly.
+- The app parses Swift source with [SwiftSyntax](https://github.com/swiftlang/swift-syntax) (the same parser the Swift compiler uses), so declaration, scope, and member boundaries are accurate. It does not run full semantic type checking, though, so dependency names are still resolved by matching identifiers rather than by cross-module type resolution.
 - It analyzes Swift source files only and intentionally skips hidden folders, package descendants, and common generated or dependency directories such as `.build`, `Pods`, `Carthage`, and `node_modules`.
 - Dependency resolution is based on names rather than full module-aware type resolution; system and third-party references can be filtered but may be classified conservatively.
 - The Swift package targets macOS 13 or later.

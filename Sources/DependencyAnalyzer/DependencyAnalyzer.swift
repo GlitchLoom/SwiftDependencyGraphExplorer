@@ -220,7 +220,19 @@ public struct DependencyAnalyzer {
             "Any", "AnyObject", "Bool", "Character", "Data", "Date", "Decimal", "Dictionary", "Double",
             "Error", "Float", "Int", "Int8", "Int16", "Int32", "Int64", "NSArray", "NSDictionary",
             "NSNumber", "NSObject", "Optional", "Set", "String", "UInt", "UInt8", "UInt16", "UInt32",
-            "UInt64", "URL", "UUID", "Void", "SwiftUI", "Combine", "Foundation", "UIKit", "AppKit"
+            "UInt64", "URL", "UUID", "Void", "SwiftUI", "Combine", "Foundation", "UIKit", "AppKit",
+            // Standard library / framework base protocols
+            "Equatable", "Hashable", "Comparable", "Identifiable", "Sendable",
+            "Codable", "Decodable", "Encodable", "RawRepresentable",
+            "CustomStringConvertible", "CustomDebugStringConvertible", "LosslessStringConvertible",
+            "CaseIterable", "OptionSet",
+            "Sequence", "Collection", "BidirectionalCollection", "RandomAccessCollection",
+            "MutableCollection", "RangeReplaceableCollection", "IteratorProtocol",
+            "ExpressibleByNilLiteral", "ExpressibleByBooleanLiteral", "ExpressibleByIntegerLiteral",
+            "ExpressibleByFloatLiteral", "ExpressibleByStringLiteral", "ExpressibleByUnicodeScalarLiteral",
+            "ExpressibleByExtendedGraphemeClusterLiteral", "ExpressibleByArrayLiteral", "ExpressibleByDictionaryLiteral",
+            "ObservableObject", "View", "Numeric", "SignedNumeric", "BinaryInteger",
+            "FloatingPoint", "Strideable", "AdditiveArithmetic"
         ]
         let systemPrefixes = [
             "AV", "CA", "CB", "CF", "CG", "CI", "CL", "CN", "CK", "Core", "Dispatch", "HK",
