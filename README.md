@@ -33,13 +33,32 @@ swift run SwiftDependencyGraphExplorer
 
 In the app, choose a Swift project folder, select a source file and root type, adjust the graph options, then select **Analyze**. Graphs can be exported as Mermaid source (`.mmd`) or SVG (`.svg`).
 
+## Command-Line Tool
+
+The same scan/parse/analyze pipeline is also available as `sdge`, a standalone CLI — useful for scripting, CI, or piping a project's dependency graph to another tool (including feeding it to an AI agent as structured input).
+
+```sh
+# Discover the types in a project (to find a value for --root-type)
+swift run sdge list-types --path /path/to/project
+
+# Build a dependency graph, same options as the app's Analysis panel
+swift run sdge analyze --path /path/to/project --root-type AccountViewModel \
+  --depth 2 --direction both --format mermaid
+
+# Or as machine-readable JSON, written to a file
+swift run sdge analyze --path /path/to/project --root-type AccountViewModel \
+  --format json --output graph.json
+```
+
+Run `swift run sdge --help` or `swift run sdge analyze --help` for the full option list (system/third-party type filters, kind filters, excluded prefixes, etc. — they mirror `AnalysisOptions`). `--format` accepts `mermaid`, `dot`, or `json`; `list-types --format json` is available too.
+
 ## Example Mermaid Output
 
 ```mermaid
 flowchart LR
     AccountViewModel["AccountViewModel"]
     AccountService["AccountService"]
-    AccountViewModel -->|property| AccountService
+    AccountViewModel --> AccountService
 ```
 
 ## Known Limitations

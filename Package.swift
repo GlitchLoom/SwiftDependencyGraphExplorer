@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "SwiftDependencyGraphExplorer", targets: ["SwiftDependencyGraphExplorerApp"]),
+        .executable(name: "sdge", targets: ["SDGECLI"]),
         .library(name: "SDGECore", targets: ["SDGECore"]),
         .library(name: "ProjectScanner", targets: ["ProjectScanner"]),
         .library(name: "SwiftTypeParser", targets: ["SwiftTypeParser"]),
@@ -14,7 +15,8 @@ let package = Package(
         .library(name: "MermaidRenderer", targets: ["MermaidRenderer"])
     ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "509.0.0")
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "509.0.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0")
     ],
     targets: [
         .target(name: "SDGECore"),
@@ -38,6 +40,17 @@ let package = Package(
             name: "SwiftDependencyGraphExplorerApp",
             dependencies: ["SDGECore", "ProjectScanner", "SwiftTypeParser", "DependencyAnalyzer", "GraphBuilder", "MermaidRenderer"]
         ),
+        .executableTarget(
+            name: "SDGECLI",
+            dependencies: [
+                "SDGECore",
+                "ProjectScanner",
+                "SwiftTypeParser",
+                "DependencyAnalyzer",
+                "GraphBuilder",
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ]
+        ),
         .testTarget(name: "SDGECoreTests", dependencies: ["SDGECore"]),
         .testTarget(name: "ProjectScannerTests", dependencies: ["ProjectScanner", "SDGECore"]),
         .testTarget(name: "SwiftTypeParserTests", dependencies: ["SwiftTypeParser", "SDGECore"]),
@@ -47,6 +60,7 @@ let package = Package(
         .testTarget(
             name: "SwiftDependencyGraphExplorerAppTests",
             dependencies: ["SwiftDependencyGraphExplorerApp", "SDGECore"]
-        )
+        ),
+        .testTarget(name: "SDGECLITests", dependencies: ["SDGECLI", "SDGECore"])
     ]
 )
