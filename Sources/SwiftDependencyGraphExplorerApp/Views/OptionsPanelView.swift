@@ -12,20 +12,25 @@ struct OptionsPanelView: View {
 
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            Form {
+                Section("Root Type") {
                     rootTypeSection
-                    Divider()
+                }
+                Section("Direction") {
                     directionSection
-                    Divider()
+                }
+                Section("Depth") {
                     depthSection
-                    Divider()
+                }
+                Section("Included Types") {
                     typeFiltersSection
-                    Divider()
+                }
+                Section("References") {
                     referenceFiltersSection
                 }
-                .padding(12)
             }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
 
             Divider()
             analyzeButton
@@ -35,90 +40,70 @@ struct OptionsPanelView: View {
 
     @ViewBuilder
     private var rootTypeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Root Type")
-                .font(.subheadline.weight(.semibold))
+        if let file = model.selectedFile {
+            Text(file.path)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
 
-            if let file = model.selectedFile {
-                Text(file.path)
+            if model.parsedTypes.isEmpty {
+                Label("No types found in this file", systemImage: "exclamationmark.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-
-                if model.parsedTypes.isEmpty {
-                    Label("No types found in this file", systemImage: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("Type", selection: selectedTypeID) {
-                        Text("Select a type").tag(Optional<SwiftType.ID>.none)
-                        ForEach(model.parsedTypes) { type in
-                            Text("\(type.name) (\(type.kind.rawValue))")
-                                .tag(Optional(type.id))
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
-                }
             } else {
-                Text("Select a Swift file from the sidebar.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Picker("Type", selection: selectedTypeID) {
+                    Text("Select a type").tag(Optional<SwiftType.ID>.none)
+                    ForEach(model.parsedTypes) { type in
+                        Text("\(type.name) (\(type.kind.rawValue))")
+                            .tag(Optional(type.id))
+                    }
+                }
+                .labelsHidden()
             }
+        } else {
+            Text("Select a Swift file from the sidebar.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
     private var depthSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Depth")
-                .font(.subheadline.weight(.semibold))
-            Picker("Dependency depth", selection: $model.options.depth) {
-                ForEach(1...3, id: \.self) { depth in
-                    Text("\(depth)").tag(depth)
-                }
+        Picker("Dependency depth", selection: $model.options.depth) {
+            ForEach(1...3, id: \.self) { depth in
+                Text("\(depth)").tag(depth)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
     private var directionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Direction")
-                .font(.subheadline.weight(.semibold))
-            Picker("Dependency direction", selection: $model.options.direction) {
-                ForEach(AnalysisDirection.allCases, id: \.self) { direction in
-                    Text(direction.label).tag(direction)
-                }
+        Picker("Dependency direction", selection: $model.options.direction) {
+            ForEach(AnalysisDirection.allCases, id: \.self) { direction in
+                Text(direction.label).tag(direction)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
     private var typeFiltersSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Included Types")
-                .font(.subheadline.weight(.semibold))
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 7) {
-                GridRow {
-                    Toggle("Classes", isOn: $model.options.includeClasses)
-                    Toggle("Structs", isOn: $model.options.includeStructs)
-                }
-                GridRow {
-                    Toggle("Enums", isOn: $model.options.includeEnums)
-                    Toggle("Protocols", isOn: $model.options.includeProtocols)
-                }
+        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 7) {
+            GridRow {
+                Toggle("Classes", isOn: $model.options.includeClasses)
+                Toggle("Structs", isOn: $model.options.includeStructs)
             }
-            .toggleStyle(.checkbox)
+            GridRow {
+                Toggle("Enums", isOn: $model.options.includeEnums)
+                Toggle("Protocols", isOn: $model.options.includeProtocols)
+            }
         }
+        .toggleStyle(.checkbox)
     }
 
     private var referenceFiltersSection: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("References")
-                .font(.subheadline.weight(.semibold))
             Toggle("System types", isOn: $model.options.includeSystemTypes)
             Toggle("Third-party types", isOn: $model.options.includeThirdPartyTypes)
             Toggle("Function body references", isOn: $model.options.includeBodyReferences)

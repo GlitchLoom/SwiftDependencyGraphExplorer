@@ -34,15 +34,48 @@ struct MermaidSourceView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView([.horizontal, .vertical]) {
+                editor
+            }
+        }
+    }
+
+    /// Mimics Xcode's source editor: a fixed-width line-number gutter that scrolls vertically in
+    /// lockstep with the text but stays pinned horizontally while the code itself scrolls
+    /// sideways -- hence the nested ScrollViews (outer vertical for both, inner horizontal for
+    /// just the text column).
+    private var editor: some View {
+        ScrollView(.vertical) {
+            HStack(alignment: .top, spacing: 0) {
+                lineNumberGutter
+                ScrollView(.horizontal) {
                     Text(source)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .padding(14)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 14)
                 }
-                .background(Color(nsColor: .textBackgroundColor))
             }
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var lineNumberGutter: some View {
+        let lineCount = max(1, source.components(separatedBy: "\n").count)
+        return VStack(alignment: .trailing, spacing: 0) {
+            ForEach(1...lineCount, id: \.self) { line in
+                Text("\(line)")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 28, alignment: .trailing)
+            }
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
+        .padding(.vertical, 14)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .trailing) {
+            Divider()
         }
     }
 

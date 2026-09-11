@@ -2,22 +2,23 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var model: AppViewModel
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
         Group {
             if model.selectedFolderURL == nil {
                 ProjectPickerView(onChooseProject: model.chooseProject)
             } else {
-                HSplitView {
+                NavigationSplitView(columnVisibility: $columnVisibility) {
                     FileSidebarView(model: model)
-                        .frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
-
+                        .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+                } content: {
                     OptionsPanelView(model: model)
-                        .frame(minWidth: 250, idealWidth: 280, maxWidth: 340)
-
+                        .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
+                } detail: {
                     GraphWorkspaceView(model: model)
-                        .frame(minWidth: 480)
                 }
+                .navigationSplitViewStyle(.balanced)
             }
         }
         .toolbar {

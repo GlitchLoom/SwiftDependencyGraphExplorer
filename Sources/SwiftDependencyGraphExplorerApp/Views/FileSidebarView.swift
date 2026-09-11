@@ -4,10 +4,17 @@ import SwiftUI
 struct FileSidebarView: View {
     @ObservedObject var model: AppViewModel
 
-    private var selection: Binding<SwiftSourceFile.ID?> {
+    /// The List's native selection. Tags every row (files and folders) with the tree node's own
+    /// id so AppKit drives the real Navigator-style selection pill, but only forwards the change
+    /// to the view model when it actually resolves to a file -- clicking a folder just expands
+    /// it, the way Xcode's Navigator does, rather than clearing the current file.
+    private var selection: Binding<String?> {
         Binding(
             get: { model.selectedFile?.id },
-            set: model.selectFile(id:)
+            set: { newValue in
+                guard let newValue, model.indexedFiles.contains(where: { $0.id == newValue }) else { return }
+                model.selectFile(id: newValue)
+            }
         )
     }
 
@@ -53,15 +60,10 @@ struct FileSidebarView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .searchable(text: $model.searchText, prompt: "Search files")
             } else {
-                List {
+                List(selection: selection) {
                     OutlineGroup(model.filteredFileTree, children: \.outlineChildren) { node in
-                        FileTreeRow(
-                            node: node,
-                            isSelected: node.file?.id == selection.wrappedValue,
-                            select: { fileID in
-                                model.selectFile(id: fileID)
-                            }
-                        )
+                        FileTreeRow(node: node)
+                            .tag(node.id)
                     }
                 }
                 .listStyle(.sidebar)
@@ -103,33 +105,16 @@ struct FileSidebarView: View {
 
 private struct FileTreeRow: View {
     let node: FileTreeNode
-    let isSelected: Bool
-    let select: (SwiftSourceFile.ID) -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: node.isFolder ? "folder" : "swift")
-                .foregroundStyle(node.isFolder ? Color.secondary : Color.orange)
-                .frame(width: 16)
+        Label {
             Text(node.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-        }
-        .font(.system(size: 12))
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .background {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.accentColor.opacity(0.18))
-            }
+        } icon: {
+            Image(systemName: node.isFolder ? "folder.fill" : "swift")
+                .foregroundStyle(node.isFolder ? Color.secondary : Color.orange)
         }
         .help(node.file?.path ?? node.name)
-        .onTapGesture {
-            guard let file = node.file else { return }
-            select(file.id)
-        }
     }
 }
