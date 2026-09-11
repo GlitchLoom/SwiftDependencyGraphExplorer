@@ -87,3 +87,4 @@ secrets/
 
 # Internal docs (not for public repo)
 docs/
+dist/
