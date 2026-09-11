@@ -434,6 +434,71 @@ final class AppViewModelTests: XCTestCase {
         XCTAssertEqual(model.graph, graphBeforeActivation)
     }
 
+    func testBackAndForwardNavigateThroughTheAnalyzedRootTypeHistory() async {
+        let fileA = sourceFile(path: "A.swift")
+        let fileB = sourceFile(path: "B.swift")
+        let fileC = sourceFile(path: "C.swift")
+        let typeA = SwiftType(name: "A", kind: .struct, filePath: fileA.path)
+        let typeB = SwiftType(name: "B", kind: .struct, filePath: fileB.path)
+        let typeC = SwiftType(name: "C", kind: .struct, filePath: fileC.path)
+        let model = AppViewModel(services: services(files: [fileA, fileB, fileC], types: [typeA, typeB, typeC]))
+
+        await model.openProject(URL(fileURLWithPath: "/tmp/Sample"))
+        await model.analyze()
+        XCTAssertEqual(model.selectedType?.name, "A")
+        XCTAssertFalse(model.canNavigateBack)
+        XCTAssertFalse(model.canNavigateForward)
+
+        // A no-op back/forward at the edges of history shouldn't change the current selection.
+        await model.navigateBack()
+        await model.navigateForward()
+        XCTAssertEqual(model.selectedType?.name, "A")
+
+        await model.activateType(named: "B")
+        XCTAssertEqual(model.selectedType?.name, "B")
+        XCTAssertTrue(model.canNavigateBack)
+        XCTAssertFalse(model.canNavigateForward)
+
+        await model.activateType(named: "C")
+        XCTAssertEqual(model.selectedType?.name, "C")
+
+        await model.navigateBack()
+        XCTAssertEqual(model.selectedType?.name, "B")
+        XCTAssertTrue(model.canNavigateBack)
+        XCTAssertTrue(model.canNavigateForward)
+
+        await model.navigateBack()
+        XCTAssertEqual(model.selectedType?.name, "A")
+        XCTAssertFalse(model.canNavigateBack)
+        XCTAssertTrue(model.canNavigateForward)
+
+        await model.navigateForward()
+        XCTAssertEqual(model.selectedType?.name, "B")
+        XCTAssertTrue(model.canNavigateForward)
+
+        // Visiting a new type after going back discards the stale forward entry, browser-style.
+        await model.activateType(named: "C")
+        XCTAssertFalse(model.canNavigateForward)
+    }
+
+    func testOpeningANewProjectResetsNavigationHistory() async {
+        let fileA = sourceFile(path: "A.swift")
+        let fileB = sourceFile(path: "B.swift")
+        let typeA = SwiftType(name: "A", kind: .struct, filePath: fileA.path)
+        let typeB = SwiftType(name: "B", kind: .struct, filePath: fileB.path)
+        let model = AppViewModel(services: services(files: [fileA, fileB], types: [typeA, typeB]))
+
+        await model.openProject(URL(fileURLWithPath: "/tmp/Sample"))
+        await model.analyze()
+        await model.activateType(named: "B")
+        XCTAssertTrue(model.canNavigateBack)
+
+        await model.openProject(URL(fileURLWithPath: "/tmp/Sample2"))
+
+        XCTAssertFalse(model.canNavigateBack)
+        XCTAssertFalse(model.canNavigateForward)
+    }
+
     private func sourceFile(path: String) -> SwiftSourceFile {
         SwiftSourceFile(
             url: URL(fileURLWithPath: "/tmp/Sample").appendingPathComponent(path),

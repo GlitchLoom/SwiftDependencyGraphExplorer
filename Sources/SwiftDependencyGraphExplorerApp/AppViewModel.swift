@@ -83,6 +83,8 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var isIndexing = false
     @Published private(set) var isAnalyzing = false
     @Published private(set) var issue: AppIssue?
+    @Published private(set) var canNavigateBack = false
+    @Published private(set) var canNavigateForward = false
 
     private(set) var allTypes: [SwiftType] = []
 
@@ -91,6 +93,14 @@ final class AppViewModel: ObservableObject {
     private var projectGeneration = 0
     private var analysisGeneration = 0
     private var lastParsedIncludeBodyReferences = AnalysisOptions.defaults.includeBodyReferences
+
+    /// Back/forward history of successfully analyzed root types, browser-style: analyzing a new
+    /// type pushes the previous one onto `backHistory` and clears `forwardHistory`; navigating
+    /// back/forward moves an entry between the two stacks without touching the other.
+    private var backHistory: [SwiftType.ID] = []
+    private var forwardHistory: [SwiftType.ID] = []
+    private var currentHistoryEntry: SwiftType.ID?
+    private var isNavigatingHistory = false
 
     init(services: AppServices = .live) {
         self.services = services
@@ -183,6 +193,43 @@ final class AppViewModel: ObservableObject {
     /// since there is nothing local to show.
     func activateType(named name: String) async {
         guard let type = allTypes.first(where: { $0.name == name }) else { return }
+        await activate(type: type)
+    }
+
+    /// Re-analyzes the previously visited root type, the way a browser's back button reloads
+    /// the previous page. No-op if there's nothing behind the current graph in the history.
+    func navigateBack() async {
+        guard let previous = backHistory.popLast() else { return }
+        guard let current = currentHistoryEntry, let type = allTypes.first(where: { $0.id == previous }) else {
+            backHistory.append(previous)
+            return
+        }
+
+        forwardHistory.append(current)
+        currentHistoryEntry = previous
+        isNavigatingHistory = true
+        await activate(type: type)
+        isNavigatingHistory = false
+        updateHistoryFlags()
+    }
+
+    /// The forward counterpart of `navigateBack()`. No-op if there's nothing ahead.
+    func navigateForward() async {
+        guard let next = forwardHistory.popLast() else { return }
+        guard let current = currentHistoryEntry, let type = allTypes.first(where: { $0.id == next }) else {
+            forwardHistory.append(next)
+            return
+        }
+
+        backHistory.append(current)
+        currentHistoryEntry = next
+        isNavigatingHistory = true
+        await activate(type: type)
+        isNavigatingHistory = false
+        updateHistoryFlags()
+    }
+
+    private func activate(type: SwiftType) async {
         selectFile(indexedFiles.first { $0.path == type.filePath })
         selectedType = parsedTypes.first { $0.id == type.id } ?? type
         invalidateAnalysis()
@@ -255,6 +302,11 @@ final class AppViewModel: ObservableObject {
 
         graph = result
         mermaidSource = services.buildMermaid(result)
+
+        if !isNavigatingHistory {
+            recordHistoryVisit(to: activeRootType.id)
+        }
+        updateHistoryFlags()
     }
 
     func clearIssue() {
@@ -271,6 +323,27 @@ final class AppViewModel: ObservableObject {
         selectedType = nil
         allTypes = []
         issue = nil
+        backHistory = []
+        forwardHistory = []
+        currentHistoryEntry = nil
+        updateHistoryFlags()
+    }
+
+    /// Records a completed analysis in the back/forward history. A re-visit of the type
+    /// currently at the top of history (e.g. re-analyzing after only changing options) updates
+    /// it in place rather than pushing a duplicate entry. Visiting an actually different type
+    /// clears `forwardHistory`, matching how a browser discards forward history once you
+    /// navigate somewhere new instead of using the forward button.
+    private func recordHistoryVisit(to id: SwiftType.ID) {
+        defer { currentHistoryEntry = id }
+        guard let current = currentHistoryEntry, current != id else { return }
+        backHistory.append(current)
+        forwardHistory.removeAll()
+    }
+
+    private func updateHistoryFlags() {
+        canNavigateBack = !backHistory.isEmpty
+        canNavigateForward = !forwardHistory.isEmpty
     }
 
     private func selectFile(_ file: SwiftSourceFile?) {

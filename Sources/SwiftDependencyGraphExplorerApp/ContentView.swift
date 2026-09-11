@@ -23,7 +23,19 @@ struct ContentView: View {
         }
         .toolbar {
             if model.selectedFolderURL != nil {
-                ToolbarItem(placement: .navigation) {
+                ToolbarItemGroup(placement: .navigation) {
+                    Button(action: { Task { await model.navigateBack() } }) {
+                        Image(systemName: "chevron.backward")
+                    }
+                    .disabled(!model.canNavigateBack)
+                    .help("Go back to the previous graph")
+
+                    Button(action: { Task { await model.navigateForward() } }) {
+                        Image(systemName: "chevron.forward")
+                    }
+                    .disabled(!model.canNavigateForward)
+                    .help("Go forward to the next graph")
+
                     Button(action: model.chooseProject) {
                         Label("Choose Project", systemImage: "folder")
                     }
