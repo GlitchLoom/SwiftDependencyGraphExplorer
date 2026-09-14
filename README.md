@@ -45,6 +45,7 @@ flowchart LR
 ## Known Limitations
 
 - The app parses Swift source with [SwiftSyntax](https://github.com/swiftlang/swift-syntax) (the same parser the Swift compiler uses), so declaration, scope, and member boundaries are accurate. It does not run full semantic type checking, though, so dependency names are still resolved by matching identifiers rather than by cross-module type resolution.
+- When two local types share the same simple name (e.g. `Config` declared in both `Sources/ModuleA` and `Sources/ModuleB` of a multi-target project), the analyzer uses the `import` statements of the referencing file to prefer the candidate declared in an imported module. If the project has no recognizable `Sources/<Module>/...` structure, or the ambiguity can't be resolved from the imports on hand, resolution falls back to the first matching type encountered while scanning.
 - It analyzes Swift source files only and intentionally skips hidden folders, package descendants, and common generated or dependency directories such as `.build`, `Pods`, `Carthage`, and `node_modules`.
 - Dependency resolution is based on names rather than full module-aware type resolution; system and third-party references can be filtered but may be classified conservatively.
 - The Swift package targets macOS 13 or later.

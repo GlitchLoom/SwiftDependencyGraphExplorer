@@ -4,8 +4,8 @@ public struct DependencyAnalyzer {
     public init() {}
 
     public func analyze(rootTypeName: String, types: [SwiftType], options: AnalysisOptions) -> DependencyGraph {
-        let typesByName = Dictionary(types.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
-        guard let rootType = typesByName[rootTypeName] else {
+        let typesByName = Dictionary(grouping: types, by: { $0.name })
+        guard let rootType = typesByName[rootTypeName]?.first else {
             return DependencyGraph()
         }
 
@@ -41,7 +41,7 @@ public struct DependencyAnalyzer {
 
     private func expandOutgoing(
         from rootType: SwiftType,
-        typesByName: [String: SwiftType],
+        typesByName: [String: [SwiftType]],
         options: AnalysisOptions,
         nodes: inout Set<DependencyNode>,
         edges: inout Set<DependencyEdge>
@@ -54,7 +54,7 @@ public struct DependencyAnalyzer {
             guard current.depth < max(0, options.depth) else { continue }
 
             for dependency in dependencies(of: current.type) {
-                let targetType = typesByName[dependency.name]
+                let targetType = resolve(name: dependency.name, from: current.type, typesByName: typesByName)
                 let relationship = resolvedRelationship(dependency.relationship, targetType: targetType)
                 guard shouldInclude(name: dependency.name, targetType: targetType, relationship: relationship, options: options) else {
                     continue
@@ -84,7 +84,7 @@ public struct DependencyAnalyzer {
     private func expandIncoming(
         from rootType: SwiftType,
         allTypes: [SwiftType],
-        typesByName: [String: SwiftType],
+        typesByName: [String: [SwiftType]],
         options: AnalysisOptions,
         nodes: inout Set<DependencyNode>,
         edges: inout Set<DependencyEdge>
@@ -97,8 +97,8 @@ public struct DependencyAnalyzer {
             guard current.depth < max(0, options.depth) else { continue }
 
             for candidate in allTypes {
-                for dependency in dependencies(of: candidate) where dependency.name == current.type.name {
-                    let relationship = resolvedRelationship(dependency.relationship, targetType: typesByName[current.type.name])
+                for dependency in dependencies(of: candidate) where resolve(name: dependency.name, from: candidate, typesByName: typesByName)?.id == current.type.id {
+                    let relationship = resolvedRelationship(dependency.relationship, targetType: current.type)
                     guard shouldInclude(name: candidate.name, targetType: candidate, relationship: relationship, options: options) else {
                         continue
                     }
@@ -139,6 +139,45 @@ public struct DependencyAnalyzer {
         }
 
         return inherited + conformances + members
+    }
+
+    /// Resolves a referenced type name against the locally scanned project. When a name is
+    /// unique, this is a plain lookup. When two or more local types share the same simple name
+    /// (e.g. `Config` declared in both `Sources/ModuleA` and `Sources/ModuleB`), the `import`
+    /// declarations of `referencingType`'s file are used to prefer the candidate declared in an
+    /// imported module. If that still leaves more than one candidate -- or none of them match --
+    /// resolution falls back to the first candidate in scan order, the same behavior this had
+    /// before cross-module disambiguation existed.
+    private func resolve(
+        name: String,
+        from referencingType: SwiftType,
+        typesByName: [String: [SwiftType]]
+    ) -> SwiftType? {
+        guard let candidates = typesByName[name], !candidates.isEmpty else { return nil }
+        guard candidates.count > 1 else { return candidates[0] }
+
+        let importedModules = Set(referencingType.imports)
+        let sameModuleCandidates = candidates.filter { candidate in
+            guard let module = inferredModule(fromFilePath: candidate.filePath) else { return false }
+            return importedModules.contains(module)
+        }
+        if sameModuleCandidates.count == 1 {
+            return sameModuleCandidates[0]
+        }
+
+        return candidates[0]
+    }
+
+    /// Infers a local module name from a scanned file's project-relative path, following the
+    /// SwiftPM convention of `Sources/<Module>/...` and `Tests/<Module>Tests/...`. Returns nil
+    /// for a project layout without that structure (e.g. a flat, single-module folder).
+    private func inferredModule(fromFilePath filePath: String) -> String? {
+        let components = filePath.split(separator: "/")
+        guard let anchorIndex = components.firstIndex(where: { $0 == "Sources" || $0 == "Tests" }),
+              components.count > anchorIndex + 1 else {
+            return nil
+        }
+        return String(components[anchorIndex + 1])
     }
 
     private func resolvedRelationship(

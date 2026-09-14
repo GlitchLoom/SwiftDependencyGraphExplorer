@@ -244,4 +244,50 @@ final class DependencyAnalyzerTests: XCTestCase {
         XCTAssertTrue(graph.edges.contains(.init(source: "Root", target: "Logger", relationship: .bodyReference, isExternal: true, memberName: nil)))
         XCTAssertTrue(graph.edges.contains(.init(source: "Root", target: "BaseClass", relationship: .inherits, isExternal: false, memberName: nil)))
     }
+
+    func testResolvesACollidingLocalTypeNameUsingTheReferencingFilesImports() {
+        let configInModuleA = SwiftType(name: "Config", kind: .struct, filePath: "Sources/ModuleA/Config.swift")
+        let configInModuleB = SwiftType(name: "Config", kind: .struct, filePath: "Sources/ModuleB/Config.swift")
+        let consumer = SwiftType(
+            name: "Consumer",
+            kind: .class,
+            filePath: "Sources/ModuleB/Consumer.swift",
+            members: [.init(name: "config", typeName: "Config", kind: .property)],
+            imports: ["ModuleA"]
+        )
+
+        let graph = DependencyAnalyzer().analyze(
+            rootTypeName: "Consumer",
+            types: [configInModuleA, configInModuleB, consumer],
+            options: .defaults
+        )
+
+        XCTAssertTrue(graph.nodes.contains(.init(name: "Config", kind: .struct, isExternal: false)))
+        XCTAssertTrue(graph.edges.contains(.init(source: "Consumer", target: "Config", relationship: .property, isExternal: false, memberName: "config")))
+        // The other module's same-named type must not also be pulled in as a dependency target.
+        XCTAssertEqual(graph.nodes.filter { $0.name == "Config" }.count, 1)
+    }
+
+    func testFallsBackToTheFirstScannedCandidateWhenACollidingLocalNameCannotBeDisambiguatedByImports() {
+        let configInModuleA = SwiftType(name: "Config", kind: .struct, filePath: "Sources/ModuleA/Config.swift")
+        let configInModuleB = SwiftType(name: "Config", kind: .struct, filePath: "Sources/ModuleB/Config.swift")
+        let consumer = SwiftType(
+            name: "Consumer",
+            kind: .class,
+            filePath: "Sources/ModuleC/Consumer.swift",
+            members: [.init(name: "config", typeName: "Config", kind: .property)],
+            imports: []
+        )
+
+        let graph = DependencyAnalyzer().analyze(
+            rootTypeName: "Consumer",
+            types: [configInModuleA, configInModuleB, consumer],
+            options: .defaults
+        )
+
+        // Same deterministic fallback as before disambiguation existed: the first candidate
+        // in scan order wins rather than the reference being dropped or duplicated.
+        XCTAssertEqual(graph.nodes.filter { $0.name == "Config" }.count, 1)
+        XCTAssertTrue(graph.edges.contains(.init(source: "Consumer", target: "Config", relationship: .property, isExternal: false, memberName: "config")))
+    }
 }

@@ -47,14 +47,17 @@ public struct SwiftType: Identifiable, Codable, Equatable {
     public var inheritedTypes: [String]
     public var conformances: [String]
     public var members: [SwiftMember]
+    /// The modules named in `import` declarations of the file this type was declared in.
+    public var imports: [String]
 
-    public init(name: String, kind: SwiftTypeKind, filePath: String, inheritedTypes: [String] = [], conformances: [String] = [], members: [SwiftMember] = []) {
+    public init(name: String, kind: SwiftTypeKind, filePath: String, inheritedTypes: [String] = [], conformances: [String] = [], members: [SwiftMember] = [], imports: [String] = []) {
         self.name = name
         self.kind = kind
         self.filePath = filePath
         self.inheritedTypes = inheritedTypes
         self.conformances = conformances
         self.members = members
+        self.imports = imports
     }
 }
 

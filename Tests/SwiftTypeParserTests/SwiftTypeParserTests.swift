@@ -329,4 +329,28 @@ final class SwiftTypeParserTests: XCTestCase {
         XCTAssertTrue(fixture.members.contains(SwiftMember(name: "service", typeName: "FixtureService", kind: .property)))
         XCTAssertTrue(fixture.members.contains(SwiftMember(name: "load", typeName: "FixtureModel", kind: .methodReturn)))
     }
+
+    func testCollectsImportedModuleNamesOnEveryTypeDeclaredInTheFile() throws {
+        let file = SwiftSourceFile(
+            url: URL(fileURLWithPath: "/tmp/Consumer.swift"),
+            path: "Sources/ModuleB/Consumer.swift",
+            contents: """
+            import Foundation
+            import ModuleA
+
+            struct Consumer {
+                let config: Config
+            }
+
+            struct Helper {}
+            """
+        )
+
+        let types = try SwiftSyntaxTypeParser().parse(file: file, includeBodyReferences: false)
+
+        XCTAssertEqual(types.map(\.name).sorted(), ["Consumer", "Helper"])
+        for type in types {
+            XCTAssertEqual(type.imports, ["Foundation", "ModuleA"])
+        }
+    }
 }

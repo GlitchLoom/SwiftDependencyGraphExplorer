@@ -35,6 +35,10 @@ public struct SwiftSyntaxTypeParser: SwiftTypeParsing {
         let collector = Self.collect(from: file.contents, filePath: file.path, includeBodyReferences: includeBodyReferences)
 
         var types = collector.types
+        for index in types.indices {
+            types[index].imports = collector.imports
+        }
+
         var indicesByName: [String: Int] = [:]
         for (index, type) in types.enumerated() {
             indicesByName[type.name] = index
@@ -86,18 +90,20 @@ private extension SwiftSyntaxTypeParser {
     struct CollectorResult {
         let types: [SwiftType]
         let extensionContributions: [ExtensionContribution]
+        let imports: [String]
     }
 
     static func collect(from source: String, filePath: String, includeBodyReferences: Bool) -> CollectorResult {
         let tree = Parser.parse(source: source)
         let visitor = TypeCollectingVisitor(filePath: filePath, includeBodyReferences: includeBodyReferences)
         visitor.walk(tree)
-        return CollectorResult(types: visitor.types, extensionContributions: visitor.extensionContributions)
+        return CollectorResult(types: visitor.types, extensionContributions: visitor.extensionContributions, imports: visitor.imports)
     }
 
     final class TypeCollectingVisitor: SyntaxVisitor {
         private(set) var types: [SwiftType] = []
         private(set) var extensionContributions: [ExtensionContribution] = []
+        private(set) var imports: [String] = []
 
         private let filePath: String
         private let includeBodyReferences: Bool
@@ -106,6 +112,12 @@ private extension SwiftSyntaxTypeParser {
             self.filePath = filePath
             self.includeBodyReferences = includeBodyReferences
             super.init(viewMode: .sourceAccurate)
+        }
+
+        override func visit(_ node: ImportDeclSyntax) -> SyntaxVisitorContinueKind {
+            let moduleName = node.path.map { $0.name.text }.joined(separator: ".")
+            SwiftSyntaxTypeParser.appendUnique(moduleName, to: &imports)
+            return .skipChildren
         }
 
         override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {

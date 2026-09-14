@@ -9,7 +9,11 @@ enum MermaidRenderScript {
         "window.setGraphInteraction(\(interactionJSON ?? "null"))"
     }
 
-    private static func javaScriptLiteral(_ value: String) -> String {
+    static func currentSVG(source: String, generation: Int) -> String {
+        "window.currentSVG(\(javaScriptLiteral(source)), \(generation))"
+    }
+
+    static func javaScriptLiteral(_ value: String) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: [value]),
               var encoded = String(data: data, encoding: .utf8) else {
             return "\"\""
